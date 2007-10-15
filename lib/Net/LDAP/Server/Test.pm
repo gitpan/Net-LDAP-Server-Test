@@ -1,0 +1,350 @@
+package Net::LDAP::Server::Test;
+
+use warnings;
+use strict;
+use Carp;
+use IO::Select;
+use IO::Socket;
+
+=head1 NAME
+
+Net::LDAP::Server::Test - test Net::LDAP code
+
+=head1 VERSION
+
+Version 0.01
+
+=cut
+
+our $VERSION = '0.01';
+
+=head1 SYNOPSIS
+
+    use Test::More tests => 10;
+    use Net::LDAP::Server::Test;
+    
+    ok( my $server = Net::LDAP::Server::Test->new(8080), 
+            "test LDAP server spawned");
+    
+    # connect to port 8080 with your Net::LDAP code.
+    ok(my $ldap = Net::LDAP->new( 'localhost', port => 8080 ),
+             "new LDAP connection" );
+             
+    # ... test stuff with $ldap ...
+    
+    # server will exit when you call final LDAP unbind().
+    ok($ldap->unbind(), "LDAP server unbound");
+
+=head1 DESCRIPTION
+
+Now you can test your Net::LDAP code without having a real
+LDAP server available.
+
+=head1 METHODS
+
+Only one user-level method is implemented: new().
+
+=cut
+
+{
+
+    package    # fool Pause
+        MyLDAPServer;
+
+    use strict;
+    use warnings;
+    use Carp;
+
+    #use Data::Dump qw( dump );
+
+    use lib '../lib';
+    use Net::LDAP::Constant qw(LDAP_SUCCESS);
+    use base 'Net::LDAP::Server';
+    use fields qw(_data);
+
+    use constant RESULT_OK => {
+        'matchedDN'    => '',
+        'errorMessage' => '',
+        'resultCode'   => LDAP_SUCCESS
+    };
+
+    # constructor
+    sub new {
+        my ( $class, $sock, $data ) = @_;
+        my $self = $class->SUPER::new($sock);
+        printf "Accepted connection from: %s\n", $sock->peerhost();
+        $self->{_data} = $data;
+        return $self;
+    }
+
+    sub unbind {
+        my $self    = shift;
+        my $reqData = shift;
+        return RESULT_OK;
+    }
+
+    # the bind operation
+    sub bind {
+        my $self    = shift;
+        my $reqData = shift;
+        return RESULT_OK;
+    }
+
+    # the search operation
+    sub search {
+        my $self    = shift;
+        my $reqData = shift;
+
+        if ( defined $self->{_data} ) {
+            return $self->_search_user_supplied_data($reqData);
+        }
+        else {
+            return $self->_search_default_test_data($reqData);
+        }
+    }
+
+    sub _search_user_supplied_data {
+        my ( $self, $reqData ) = @_;
+        return RESULT_OK, @{ $self->{_data} };
+    }
+
+    sub _search_default_test_data {
+        my ( $self, $reqData ) = @_;
+        my $base = $reqData->{'baseObject'};
+
+        # plain die if dn contains 'dying'
+        die("panic") if $base =~ /dying/;
+
+        # return a correct LDAPresult, but an invalid entry
+        return RESULT_OK, { test => 1 } if $base =~ /invalid entry/;
+
+        # return an invalid LDAPresult
+        return { test => 1 } if $base =~ /invalid result/;
+
+        my @entries;
+        if ( $reqData->{'scope'} ) {
+
+            # onelevel or subtree
+            for ( my $i = 1; $i < 11; $i++ ) {
+                my $dn    = "ou=test $i,$base";
+                my $entry = Net::LDAP::Entry->new;
+                $entry->dn($dn);
+                $entry->add(
+                    dn => $dn,
+                    sn => 'value1',
+                    cn => [qw(value1 value2)]
+                );
+                push @entries, $entry;
+            }
+
+            my $entry1 = Net::LDAP::Entry->new;
+            $entry1->dn("cn=dying entry,$base");
+            $entry1->add(
+                cn => 'dying entry',
+                description =>
+                    'This entry will result in a dying error when queried'
+            );
+            push @entries, $entry1;
+
+            my $entry2 = Net::LDAP::Entry->new;
+            $entry2->dn("cn=invalid entry,$base");
+            $entry2->add(
+                cn => 'invalid entry',
+                description =>
+                    'This entry will result in ASN1 error when queried'
+            );
+            push( @entries, $entry2 );
+
+            my $entry3 = Net::LDAP::Entry->new;
+            $entry3->dn("cn=invalid result,$base");
+            $entry3->add(
+                cn => 'invalid result',
+                description =>
+                    'This entry will result in ASN1 error when queried'
+            );
+            push @entries, $entry3;
+        }
+        else {
+
+            # base
+            my $entry = Net::LDAP::Entry->new;
+            $entry->dn($base);
+            $entry->add(
+                dn => $base,
+                sn => 'value1',
+                cn => [qw(value1 value2)]
+            );
+            push @entries, $entry;
+        }
+        return RESULT_OK, @entries;
+    }
+
+}
+
+=head2 new( I<port>, I<data> )
+
+Create a new server. Basically this just fork()s a child process
+listing on I<port> and handling requests using Net::LDAP::Server.
+
+I<port> defaults to 10636.
+
+I<data> is optional data to return from the Net::LDAP search() function.
+Typically it would be an array ref of Net::LDAP::Entry objects.
+
+new() will croak() if there was a problem fork()ing a new server.
+
+Returns a Net::LDAP::Server::Test object, which is just a
+blessed reference to the PID of the forked server.
+
+=cut
+
+sub new {
+    my $class = shift;
+    my $port  = shift || 10636;
+    my $data  = shift;
+
+    my $pid = fork();
+
+    if ( !defined $pid ) {
+        croak "can't fork a LDAP test server: $!";
+    }
+    elsif ( $pid == 0 ) {
+
+        # the child (server)
+        my $sock = IO::Socket::INET->new(
+            Listen    => 5,
+            Proto     => 'tcp',
+            Reuse     => 1,
+            LocalPort => $port
+        );
+
+        warn "creating new LDAP server on port $port ... \n";
+
+        my $sel = IO::Select->new($sock);
+        my %Handlers;
+        while ( my @ready = $sel->can_read ) {
+            foreach my $fh (@ready) {
+                if ( $fh == $sock ) {
+
+                    # let's create a new socket
+                    my $psock = $sock->accept;
+                    $sel->add($psock);
+                    $Handlers{*$psock} = MyLDAPServer->new( $psock, $data );
+
+                    #warn "new socket created";
+                }
+                else {
+                    my $result = $Handlers{*$fh}->handle;
+                    if ($result) {
+
+                        # we have finished with the socket
+                        $sel->remove($fh);
+                        $fh->close;
+                        delete $Handlers{*$fh};
+
+                        # if there are no open connections,
+                        # exit the child process.
+                        if ( !keys %Handlers ) {
+                            warn " ... shutting down server\n";
+                            exit(0);
+                        }
+                    }
+                }
+            }
+        }
+
+        # if we get here, we had some kinda problem.
+        croak "reached the end of while() loop prematurely";
+
+    }
+    else {
+
+        # the parent (client).
+        # hesitate a little to account for slow fork()s since
+        # sleep() is not strictly portable.
+        my $start = time;
+        while ( $start == time() ) {
+            1;
+        }
+        return bless( \$pid, $class );
+    }
+
+}
+
+=head2 DESTROY
+
+When a LDAP test server object is destroyed, waitpid() is called
+on the associated child process. Typically this is unnecessary, but
+implemented here as an exercise.
+
+=cut
+
+sub DESTROY {
+    my $pid = ${ $_[0] };
+
+    #carp "DESTROYing a LDAP server with pid $pid";
+    my $epid = waitpid( $pid, 0 );
+
+    #carp "$pid [$epid] exited with value $?";
+
+}
+
+=head1 AUTHOR
+
+Peter Karman, C<< <karman at cpan.org> >>
+
+=head1 BUGS
+
+Please report any bugs or feature requests to
+C<bug-net-ldap-server-test at rt.cpan.org>, or through the web interface at
+L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=Net-LDAP-Server-Test>.
+I will be notified, and then you'll automatically be notified of progress on
+your bug as I make changes.
+
+=head1 SUPPORT
+
+You can find documentation for this module with the perldoc command.
+
+    perldoc Net::LDAP::Server::Test
+
+You can also look for information at:
+
+=over 4
+
+=item * AnnoCPAN: Annotated CPAN documentation
+
+L<http://annocpan.org/dist/Net-LDAP-Server-Test>
+
+=item * CPAN Ratings
+
+L<http://cpanratings.perl.org/d/Net-LDAP-Server-Test>
+
+=item * RT: CPAN's request tracker
+
+L<http://rt.cpan.org/NoAuth/Bugs.html?Dist=Net-LDAP-Server-Test>
+
+=item * Search CPAN
+
+L<http://search.cpan.org/dist/Net-LDAP-Server-Test>
+
+=back
+
+=head1 ACKNOWLEDGEMENTS
+
+The Minnesota Supercomputing Institute C<< http://www.msi.umn.edu/ >>
+sponsored the development of this software.
+
+=head1 COPYRIGHT & LICENSE
+
+Copyright 2007 by the Regents of the University of Minnesota.
+
+This program is free software; you can redistribute it and/or modify it
+under the same terms as Perl itself.
+
+=head1 SEE ALSO
+
+Net::LDAP::Server
+
+=cut
+
+1;
