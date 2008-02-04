@@ -3,3 +3,8 @@ Revision history for Net-LDAP-Server-Test
 0.01    12 Oct 2007
         First version, released on an unsuspecting world.
 
+0.02    4 Feb 2008
+        - no code changes, just bumped version to reflect patch accepted for
+          Net::LDAP::Server.
+
+

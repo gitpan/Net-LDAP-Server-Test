@@ -6,17 +6,11 @@ use Carp;
 use IO::Select;
 use IO::Socket;
 
+our $VERSION = '0.02';
+
 =head1 NAME
 
 Net::LDAP::Server::Test - test Net::LDAP code
-
-=head1 VERSION
-
-Version 0.01
-
-=cut
-
-our $VERSION = '0.01';
 
 =head1 SYNOPSIS
 
@@ -262,10 +256,13 @@ sub new {
         # the parent (client).
         # hesitate a little to account for slow fork()s since
         # sleep() is not strictly portable.
-        my $start = time;
-        while ( $start == time() ) {
+        #warn "starting nap at " . localtime() . "\n";
+        my $wait = time() + 1;
+        while ( time() < $wait ) {
             1;
         }
+
+        #warn "awake at " . localtime() . "\n";
         return bless( \$pid, $class );
     }
 

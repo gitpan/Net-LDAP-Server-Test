@@ -1,9 +1,11 @@
 --- #YAML:1.0
 name:                Net-LDAP-Server-Test
-version:             0.01
+version:             0.02
 abstract:            test Net::LDAP code
 license:             ~
-generated_by:        ExtUtils::MakeMaker version 6.36
+author:              
+    - Peter Karman <karman@cpan.org>
+generated_by:        ExtUtils::MakeMaker version 6.42
 distribution_type:   module
 requires:     
     IO::Select:                    0
@@ -12,7 +14,5 @@ requires:
     Net::LDAP::Server:             0.3
     Test::More:                    0
 meta-spec:
-    url:     http://module-build.sourceforge.net/META-spec-v1.2.html
-    version: 1.2
-author:
-    - Peter Karman <karman@cpan.org>
+    url:     http://module-build.sourceforge.net/META-spec-v1.3.html
+    version: 1.3
