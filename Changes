@@ -7,4 +7,10 @@ Revision history for Net-LDAP-Server-Test
         - no code changes, just bumped version to reflect patch accepted for
           Net::LDAP::Server.
 
+0.03    9 July 2008
+        * new() now takes key/value pairs rather than single $data arg
+        * added auto_schema feature to enable add/update/delete with
+          in-memory Net::LDAP::Entry objects in server.
+
+
 

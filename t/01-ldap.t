@@ -63,7 +63,7 @@ $entry->add(
 );
 push @mydata, $entry;
 
-ok( $server = Net::LDAP::Server::Test->new( $opts{port}, \@mydata ),
+ok( $server = Net::LDAP::Server::Test->new( $opts{port}, data => \@mydata ),
     "spawn new server with our own data" );
 
 ok( $ldap = Net::LDAP->new( $host, %opts, ), "new LDAP connection" );

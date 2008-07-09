@@ -6,7 +6,7 @@ use Carp;
 use IO::Select;
 use IO::Socket;
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 =head1 NAME
 
@@ -51,10 +51,13 @@ Only one user-level method is implemented: new().
 
     #use Data::Dump qw( dump );
 
-    use lib '../lib';
     use Net::LDAP::Constant qw(LDAP_SUCCESS);
+    use Net::LDAP::Entry;
+    use Net::LDAP::Filter;
+    use Net::LDAP::FilterMatch;
+
     use base 'Net::LDAP::Server';
-    use fields qw(_data);
+    use fields qw( _flags );
 
     use constant RESULT_OK => {
         'matchedDN'    => '',
@@ -62,12 +65,14 @@ Only one user-level method is implemented: new().
         'resultCode'   => LDAP_SUCCESS
     };
 
+    our %Data;    # package data lasts as long as $$ does.
+
     # constructor
     sub new {
-        my ( $class, $sock, $data ) = @_;
+        my ( $class, $sock, %args ) = @_;
         my $self = $class->SUPER::new($sock);
         printf "Accepted connection from: %s\n", $sock->peerhost();
-        $self->{_data} = $data;
+        $self->{_flags} = \%args;
         return $self;
     }
 
@@ -86,24 +91,93 @@ Only one user-level method is implemented: new().
 
     # the search operation
     sub search {
-        my $self    = shift;
-        my $reqData = shift;
+        my $self = shift;
 
-        if ( defined $self->{_data} ) {
-            return $self->_search_user_supplied_data($reqData);
+        if ( defined $self->{_flags}->{data} ) {
+            return $self->_search_user_supplied_data(@_);
+        }
+        elsif ( defined $self->{_flags}->{auto_schema} ) {
+            return $self->_search_auto_schema_data(@_);
         }
         else {
-            return $self->_search_default_test_data($reqData);
+            return $self->_search_default_test_data(@_);
         }
     }
 
     sub _search_user_supplied_data {
         my ( $self, $reqData ) = @_;
-        return RESULT_OK, @{ $self->{_data} };
+
+        #warn 'SEARCH USER DATA: ' . dump \@_;
+        return RESULT_OK, @{ $self->{_flags}->{data} };
+    }
+
+    sub _search_auto_schema_data {
+        my ( $self, $reqData, $reqMsg ) = @_;
+
+        #warn 'SEARCH SCHEMA: ' . dump \@_;
+
+        my @results;
+        my $base    = $reqData->{baseObject};
+        my $scope   = $reqData->{scope} || 'sub';
+        my @filters = ();
+
+        if ( $scope ne 'base' ) {
+            if ( exists $reqData->{filter} ) {
+
+                push( @filters,
+                    bless( $reqData->{filter}, 'Net::LDAP::Filter' ) );
+
+            }
+        }
+
+        #warn "stored Data: " . dump \%Data;
+        #warn "searching for " . dump \@filters;
+
+        # loop over all keys looking for match
+        for my $dn ( keys %Data ) {
+
+            next unless $dn =~ m/$base$/;
+
+            if ( $scope eq 'base' ) {
+                next unless $dn eq $base;
+            }
+            elsif ( $scope eq 'one' ) {
+                next unless $dn =~ m/^(\w+=\w+,)?$base$/;
+            }
+
+            my $entry = $Data{$dn};
+
+            #warn "trying to match $dn : " . dump $entry;
+
+            my $match = 0;
+            for my $filter (@filters) {
+
+                if ( $filter->match($entry) ) {
+
+                    #warn "$f matches entry $dn";
+                    $match++;
+                }
+            }
+
+            #warn "matched $match";
+            if ( $match == scalar(@filters) ) {    # or $dn eq $base ) {
+
+                # clone the entry so that client cannot modify %Data
+                push( @results, $entry->clone );
+            }
+        }
+
+       #warn "search results for " . dump($reqData) . "\n: " . dump \@results;
+
+        return RESULT_OK, @results;
+
     }
 
     sub _search_default_test_data {
         my ( $self, $reqData ) = @_;
+
+        #warn 'SEARCH DEFAULT: ' . dump \@_;
+
         my $base = $reqData->{'baseObject'};
 
         # plain die if dn contains 'dying'
@@ -173,17 +247,126 @@ Only one user-level method is implemented: new().
         return RESULT_OK, @entries;
     }
 
-}
+    sub add {
+        my ( $self, $reqData, $reqMsg ) = @_;
 
-=head2 new( I<port>, I<data> )
+        #warn 'ADD: ' . dump \@_;
+
+        my $entry = Net::LDAP::Entry->new;
+        my $key   = $reqData->{objectName};
+        $entry->dn($key);
+        for my $attr ( @{ $reqData->{attributes} } ) {
+            $entry->add( $attr->{type} => \@{ $attr->{vals} } );
+        }
+
+        $Data{$key} = $entry;
+
+        return RESULT_OK;
+    }
+
+    sub modify {
+        my ( $self, $reqData, $reqMsg ) = @_;
+
+        #warn 'MODIFY: ' . dump \@_;
+
+        my $key = $reqData->{object};
+        if ( !exists $Data{$key} ) {
+            croak "can't modify a non-existent entry: $key";
+        }
+
+        my @mods = @{ $reqData->{modification} };
+        for my $mod (@mods) {
+            my $attr  = $mod->{modification}->{type};
+            my $vals  = $mod->{modification}->{vals};
+            my $entry = $Data{$key};
+            $entry->replace( $attr => $vals );
+        }
+
+        return RESULT_OK;
+
+    }
+
+    sub delete {
+        my ( $self, $reqData, $reqMsg ) = @_;
+
+        #warn 'DELETE: ' . dump \@_;
+
+        my $key = $reqData;
+        if ( !exists $Data{$key} ) {
+            croak "can't delete a non-existent entry: $key";
+        }
+        delete $Data{$key};
+
+        return RESULT_OK;
+
+    }
+
+    sub modifyDN {
+        my ( $self, $reqData, $reqMsg ) = @_;
+
+        #warn "modifyDN: " . dump \@_;
+
+        my $oldkey = $reqData->{entry};
+        my $newkey = join( ',', $reqData->{newrdn}, $reqData->{newSuperior} );
+        if ( !exists $Data{$oldkey} ) {
+            croak "can't modifyDN for non-existent entry: $oldkey";
+        }
+        my $entry    = $Data{$oldkey};
+        my $newentry = $entry->clone;
+        $newentry->dn($newkey);
+        $Data{$newkey} = $newentry;
+
+        #warn "created new entry: $newkey";
+        if ( $reqData->{deleteoldrdn} ) {
+            delete $Data{$oldkey};
+
+            #warn "deleted old entry: $oldkey";
+        }
+
+        return RESULT_OK;
+    }
+
+    sub compare {
+        my ( $self, $reqData, $reqMsg ) = @_;
+
+        #warn "compare: " . dump \@_;
+
+        return RESULT_OK;
+    }
+
+    sub abandon {
+        my ( $self, $reqData, $reqMsg ) = @_;
+
+        #warn "abandon: " . dump \@_;
+
+        return RESULT_OK;
+    }
+
+}    # end MyLDAPServer
+
+=head2 new( I<port>, I<key_value_args> )
 
 Create a new server. Basically this just fork()s a child process
 listing on I<port> and handling requests using Net::LDAP::Server.
 
 I<port> defaults to 10636.
 
+I<key_value_args> may be:
+
+=over
+
+=item data
+
 I<data> is optional data to return from the Net::LDAP search() function.
 Typically it would be an array ref of Net::LDAP::Entry objects.
+
+=item auto_schema
+
+A true value means the add(), modify() and delete() methods will
+store internal in-memory data based on DN values, so that search()
+will mimic working on a real LDAP schema.
+
+=back
 
 new() will croak() if there was a problem fork()ing a new server.
 
@@ -195,7 +378,12 @@ blessed reference to the PID of the forked server.
 sub new {
     my $class = shift;
     my $port  = shift || 10636;
-    my $data  = shift;
+    my %arg   = @_;
+
+    if ( $arg{data} and $arg{auto_schema} ) {
+        croak
+            "cannot handle both 'data' and 'auto_schema' features. Pick one.";
+    }
 
     my $pid = fork();
 
@@ -223,7 +411,7 @@ sub new {
                     # let's create a new socket
                     my $psock = $sock->accept;
                     $sel->add($psock);
-                    $Handlers{*$psock} = MyLDAPServer->new( $psock, $data );
+                    $Handlers{*$psock} = MyLDAPServer->new( $psock, %arg );
 
                     #warn "new socket created";
                 }

@@ -13,7 +13,7 @@ WriteMakefile(
         'IO::Socket' => 0,
         'IO::Select' => 0,
         'Net::LDAP::Server' => '0.3',
-        'Net::LDAP::Constant' => 0,
+        'Net::LDAP'  => 0,
 
     },
     dist                => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },
