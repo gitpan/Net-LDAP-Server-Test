@@ -6,7 +6,7 @@ use Carp;
 use IO::Select;
 use IO::Socket;
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 =head1 NAME
 
@@ -445,7 +445,7 @@ sub new {
         # hesitate a little to account for slow fork()s since
         # sleep() is not strictly portable.
         #warn "starting nap at " . localtime() . "\n";
-        my $wait = time() + 1;
+        my $wait = time() + 2;
         while ( time() < $wait ) {
             1;
         }

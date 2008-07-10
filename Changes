@@ -12,5 +12,8 @@ Revision history for Net-LDAP-Server-Test
         * added auto_schema feature to enable add/update/delete with
           in-memory Net::LDAP::Entry objects in server.
 
+0.04    10 July 2008
+        * bump mock sleep time at server fork() time to allow for some test failures.
+
 
 
