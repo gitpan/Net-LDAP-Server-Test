@@ -6,7 +6,7 @@ use Carp;
 use IO::Select;
 use IO::Socket;
 
-our $VERSION = '0.04';
+our $VERSION = '0.05';
 
 =head1 NAME
 
@@ -261,6 +261,10 @@ Only one user-level method is implemented: new().
 
         $Data{$key} = $entry;
 
+        if ( exists $self->{_flags}->{active_directory} ) {
+            $self->_add_AD( $reqData, $reqMsg, $key, $entry, \%Data );
+        }
+
         return RESULT_OK;
     }
 
@@ -280,6 +284,10 @@ Only one user-level method is implemented: new().
             my $vals  = $mod->{modification}->{vals};
             my $entry = $Data{$key};
             $entry->replace( $attr => $vals );
+        }
+
+        if ( $self->{_flags}->{active_directory} ) {
+            $self->_modify_AD( $reqData, $reqMsg, \%Data );
         }
 
         return RESULT_OK;
@@ -342,6 +350,126 @@ Only one user-level method is implemented: new().
         return RESULT_OK;
     }
 
+    my $token_counter = 100;
+    my $sid           = pack( "H2 H2 n N V*",
+        "01", "05", ( 0 << 32 ) + 5,
+        21, 350811113, 3086823889, 3317782326 );
+    my $sid_str = 'S-01-21474836501-350811113-3086823889-3317782326';
+
+    sub _add_AD {
+        my ( $server, $reqData, $reqMsg, $key, $entry, $data ) = @_;
+
+        for my $attr ( @{ $reqData->{attributes} } ) {
+            if ( $attr->{type} eq 'objectClass' ) {
+                if ( grep { $_ eq 'group' } @{ $attr->{vals} } ) {
+
+                    # groups
+                    $entry->add( 'primaryGroupToken' => ++$token_counter );
+                    $entry->add( 'objectSID' => "$sid_str-$token_counter" );
+
+                }
+                else {
+
+                    # users
+                    my $gid = $entry->get_value('primaryGroupID');
+                    $entry->add( 'objectSID' => "$sid-$gid" );
+
+                }
+            }
+
+        }
+
+        _update_groups($data);
+
+        #dump $reqData;
+        #dump $data;
+
+    }
+
+    sub _update_groups {
+        my $data = shift;
+
+        # all users first
+
+        for my $key ( keys %$data ) {
+            my $entry = $data->{$key};
+
+            #warn "users: update groups for $key";
+            if ( $entry->get_value('sAMAccountName') ) {
+
+                #dump $entry;
+
+                # user entry
+                # get its groups and add this user to each of them.
+                my @groups = $entry->get_value('memberOf');
+                for my $dn (@groups) {
+                    my $group = $data->{$dn};
+                    my %users
+                        = map { $_ => 1 } ( $group->get_value('member') );
+
+                    if ( !exists $users{$key} ) {
+
+                        $users{$key}++;
+
+                        #warn "adding $key as member of group $dn";
+
+                        #dump \%users;
+                        $group->replace( member => [ keys %users ] );
+                    }
+                }
+
+            }
+        }
+
+        # all groups second
+        for my $key ( keys %$data ) {
+            my $entry = $data->{$key};
+
+            #warn "groups: update groups for $key";
+            if ( !$entry->get_value('sAMAccountName') ) {
+
+                #dump $entry;
+
+            # group entry
+            # are the users listed in member still assigned in their memberOf?
+                my %users = map { $_ => 1 } $entry->get_value('member');
+                for my $dn ( keys %users ) {
+
+                    #warn "User $dn is a member in $key";
+                    my $user = $data->{$dn};
+
+                    #dump $user;
+
+                    my %groups = map { $_ => 1 } $user->get_value('memberOf');
+
+                    #dump \%groups;
+
+                    # if $user does not list $key (group) as a memberOf,
+                    # then make sure group does not list $user as a member.
+                    if ( !exists $groups{$key} && exists $users{$dn} ) {
+
+                        #warn "removing $dn from group member in $key";
+                        delete $users{$dn};
+                        $entry->replace( member => [ keys %users ] );
+                    }
+                }
+
+            }
+
+        }
+
+    }
+
+    sub _modify_AD {
+        my ( $server, $reqData, $reqMsg, $data ) = @_;
+
+        #dump $data;
+        _update_groups($data);
+
+        #dump $data;
+
+    }
+
 }    # end MyLDAPServer
 
 =head2 new( I<port>, I<key_value_args> )
@@ -365,6 +493,12 @@ Typically it would be an array ref of Net::LDAP::Entry objects.
 A true value means the add(), modify() and delete() methods will
 store internal in-memory data based on DN values, so that search()
 will mimic working on a real LDAP schema.
+
+=item active_directory
+
+Work in Active Directory mode. This means that entries are automatically
+assigned a objectSID, and some effort is made to mimic the member/memberOf
+linking between AD Users and Groups.
 
 =back
 
@@ -467,8 +601,11 @@ implemented here as an exercise.
 sub DESTROY {
     my $pid = ${ $_[0] };
 
-    #carp "DESTROYing a LDAP server with pid $pid";
-    my $epid = waitpid( $pid, 0 );
+    #warn "DESTROYing a LDAP server with pid $pid";
+
+    # calling waitpid() here causes some tests to hang indefinitely if they
+    # die prematurely.
+    #my $epid = waitpid( $pid, 0 );
 
     #carp "$pid [$epid] exited with value $?";
 

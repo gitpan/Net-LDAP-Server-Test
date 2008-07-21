@@ -13,7 +13,7 @@ use Net::LDAP::Entry;
 #
 
 my %opts = (
-    port  => '8080',
+    port  => '10636',
     dnc   => 'ou=internal,dc=foo',
     debug => $ENV{PERL_DEBUG} || 0,
 );
