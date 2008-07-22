@@ -6,7 +6,7 @@ use Carp;
 use IO::Select;
 use IO::Socket;
 
-our $VERSION = '0.05';
+our $VERSION = '0.06';
 
 =head1 NAME
 
@@ -372,7 +372,8 @@ Only one user-level method is implemented: new().
 
                     # users
                     my $gid = $entry->get_value('primaryGroupID');
-                    $entry->add( 'objectSID' => "$sid-$gid" );
+                    $entry->add( 'objectSID'         => "$sid-$gid" );
+                    $entry->add( 'distinguishedName' => $key );
 
                 }
             }
@@ -386,10 +387,44 @@ Only one user-level method is implemented: new().
 
     }
 
+    # AD stores group assignments in 'member' attribute
+    # of each group. 'memberOf' is linked internally to that
+    # attribute. We set 'memberOf' here if mimicing AD.
     sub _update_groups {
         my $data = shift;
 
-        # all users first
+        # all groups
+        for my $key ( keys %$data ) {
+            my $entry = $data->{$key};
+
+            #warn "groups: update groups for $key";
+            if ( !$entry->get_value('sAMAccountName') ) {
+
+                #dump $entry;
+
+                # group entry.
+                # are the users listed in member
+                # still assigned in their memberOf?
+                my %users = map { $_ => 1 } $entry->get_value('member');
+                for my $dn ( keys %users ) {
+
+                    #warn "User $dn is a member in $key";
+                    my $user = $data->{$dn};
+                    my %groups = map { $_ => 1 } $user->get_value('memberOf');
+
+                    # if $user does not list $key (group) as a memberOf,
+                    # then add it.
+                    if ( !exists $groups{$key} && exists $users{$dn} ) {
+                        $groups{$key}++;
+                        $user->replace( memberOf => [ keys %groups ] );
+                    }
+                }
+
+            }
+
+        }
+
+        # all users
 
         for my $key ( keys %$data ) {
             my $entry = $data->{$key};
@@ -401,61 +436,21 @@ Only one user-level method is implemented: new().
 
                 # user entry
                 # get its groups and add this user to each of them.
-                my @groups = $entry->get_value('memberOf');
-                for my $dn (@groups) {
+                my %groups = map { $_ => 1 } $entry->get_value('memberOf');
+                for my $dn ( keys %groups ) {
                     my $group = $data->{$dn};
                     my %users
                         = map { $_ => 1 } ( $group->get_value('member') );
 
+                    # if group no longer lists this user as a member,
+                    # remove group from memberOf
                     if ( !exists $users{$key} ) {
-
-                        $users{$key}++;
-
-                        #warn "adding $key as member of group $dn";
-
-                        #dump \%users;
-                        $group->replace( member => [ keys %users ] );
+                        delete $groups{$dn};
+                        $entry->replace( memberOf => [ keys %groups ] );
                     }
                 }
 
             }
-        }
-
-        # all groups second
-        for my $key ( keys %$data ) {
-            my $entry = $data->{$key};
-
-            #warn "groups: update groups for $key";
-            if ( !$entry->get_value('sAMAccountName') ) {
-
-                #dump $entry;
-
-            # group entry
-            # are the users listed in member still assigned in their memberOf?
-                my %users = map { $_ => 1 } $entry->get_value('member');
-                for my $dn ( keys %users ) {
-
-                    #warn "User $dn is a member in $key";
-                    my $user = $data->{$dn};
-
-                    #dump $user;
-
-                    my %groups = map { $_ => 1 } $user->get_value('memberOf');
-
-                    #dump \%groups;
-
-                    # if $user does not list $key (group) as a memberOf,
-                    # then make sure group does not list $user as a member.
-                    if ( !exists $groups{$key} && exists $users{$dn} ) {
-
-                        #warn "removing $dn from group member in $key";
-                        delete $users{$dn};
-                        $entry->replace( member => [ keys %users ] );
-                    }
-                }
-
-            }
-
         }
 
     }
@@ -466,7 +461,7 @@ Only one user-level method is implemented: new().
         #dump $data;
         _update_groups($data);
 
-        #dump $data;
+        #Data::Dump::dump $data;
 
     }
 

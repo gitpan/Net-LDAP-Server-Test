@@ -19,3 +19,6 @@ Revision history for Net-LDAP-Server-Test
         * add active_directory mode
         * change test port from 8080 to 10636
 
+0.06    22 July 2008
+        * reverse member/memberOf logic in AD mode to reflect how AD actually works.
+
