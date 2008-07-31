@@ -22,3 +22,6 @@ Revision history for Net-LDAP-Server-Test
 0.06    22 July 2008
         * reverse member/memberOf logic in AD mode to reflect how AD actually works.
 
+0.07    31 July 2008
+        * fix auto SID stuff in active_directory mode to correctly pack/unpack on all systems.
+

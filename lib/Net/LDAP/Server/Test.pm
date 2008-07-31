@@ -6,7 +6,7 @@ use Carp;
 use IO::Select;
 use IO::Socket;
 
-our $VERSION = '0.06';
+our $VERSION = '0.07';
 
 =head1 NAME
 
@@ -351,10 +351,36 @@ Only one user-level method is implemented: new().
     }
 
     my $token_counter = 100;
-    my $sid           = pack( "H2 H2 n N V*",
-        "01", "05", ( 0 << 32 ) + 5,
-        21, 350811113, 3086823889, 3317782326 );
-    my $sid_str = 'S-01-21474836501-350811113-3086823889-3317782326';
+    my $sid_str       = 'S-01-5-21-350811113-3086823889-3317782326-1234';
+
+    sub _sid2string {
+        my $sid = shift;
+        my (@unpack) = unpack( "H2 H2 n N V*", $sid );
+        my ( $sid_rev, $num_auths, $id1, $id2, @ids ) = (@unpack);
+        return join( "-", "S", $sid_rev, ( $id1 << 32 ) + $id2, @ids );
+    }
+
+    sub _string2sid {
+        my $string = shift;
+        my (@split) = split( m/\-/, $string );
+        my ( $prefix, $sid_rev, $auth_id, @ids ) = (@split);
+        if ( $auth_id != scalar(@ids) ) {
+            die "bad string: $string";
+        }
+
+        my $sid = pack( "C4", "$sid_rev", "$auth_id", 0, 0 );
+        $sid .= pack( "C4",
+            ( $auth_id & 0xff000000 ) >> 24,
+            ( $auth_id & 0x00ff0000 ) >> 16,
+            ( $auth_id & 0x0000ff00 ) >> 8,
+            $auth_id & 0x000000ff );
+
+        for my $i (@ids) {
+            $sid .= pack( "I", $i );
+        }
+
+        return $sid;
+    }
 
     sub _add_AD {
         my ( $server, $reqData, $reqMsg, $key, $entry, $data ) = @_;
@@ -364,15 +390,20 @@ Only one user-level method is implemented: new().
                 if ( grep { $_ eq 'group' } @{ $attr->{vals} } ) {
 
                     # groups
-                    $entry->add( 'primaryGroupToken' => ++$token_counter );
-                    $entry->add( 'objectSID' => "$sid_str-$token_counter" );
+                    $token_counter++;
+                    ( my $group_sid_str = $sid_str )
+                        =~ s/-1234$/-$token_counter/;
+                    $entry->add( 'primaryGroupToken' => $token_counter );
+                    $entry->add( 'objectSID'         => "$group_sid_str" );
 
                 }
                 else {
 
                     # users
                     my $gid = $entry->get_value('primaryGroupID');
-                    $entry->add( 'objectSID'         => "$sid-$gid" );
+                    ( my $user_sid_str = $sid_str ) =~ s/-1234$/-$gid/;
+                    my $user_sid = _string2sid($user_sid_str);
+                    $entry->add( 'objectSID'         => $user_sid );
                     $entry->add( 'distinguishedName' => $key );
 
                 }
