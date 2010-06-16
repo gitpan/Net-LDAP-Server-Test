@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               Net-LDAP-Server-Test
-version:            0.09
+version:            0.10
 abstract:           test Net::LDAP code
 author:
     - Peter Karman <karman@cpan.org>
