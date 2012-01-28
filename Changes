@@ -45,3 +45,11 @@ Revision history for Net-LDAP-Server-Test
 
 0.11    04 June 2011
         * fixes for Net::LDAP::Server 0.43, per patch from RT https://rt.cpan.org/Ticket/Display.html?id=68577
+
+0.12    27 Jan 2012
+        * added stop() method in response to https://rt.cpan.org/Ticket/Display.html?id=69615
+          removed DESTROY() method since it was a no-op.
+        * RT 74425 - conditional debug output
+        * RT 74416 - allow for instantiating with an existing socket object
+        * RT 74461 - return requested attributes in auto_schema mode
+

@@ -7,7 +7,7 @@ use IO::Select;
 use IO::Socket;
 use Data::Dump ();
 
-our $VERSION = '0.11';
+our $VERSION = '0.12';
 
 =head1 NAME
 
@@ -79,7 +79,7 @@ Only one user-level method is implemented: new().
     sub new {
         my ( $class, $sock, %args ) = @_;
         my $self = $class->SUPER::new($sock);
-        warn sprintf "Accepted connection from: %s\n", $sock->peerhost();
+        warn sprintf "Accepted connection from: %s\n", $sock->peerhost() if $ENV{LDAP_DEBUG};
         $self->{_flags} = \%args;
         return $self;
     }
@@ -129,6 +129,7 @@ Only one user-level method is implemented: new().
         my @results;
         my $base    = $reqData->{baseObject};
         my $scope   = $reqData->{scope} || 'sub';
+        my @attrs   = @{$reqData->{attributes} || []};
         my @filters = ();
 
         if ( $scope ne 'base' ) {
@@ -217,7 +218,16 @@ Only one user-level method is implemented: new().
             if ( $match == scalar(@filters) ) {    # or $dn eq $base ) {
 
                 # clone the entry so that client cannot modify %Data
-                push( @results, $entry->clone );
+                my $result = $entry->clone;
+
+                # filter returned attributes to those requested
+                if (@attrs) {
+                    my %wanted = map { $_ => 1 } @attrs;
+                    $result->delete($_)
+                        for grep { not $wanted{$_} } $result->attributes;
+                }
+
+                push( @results, $result );
 
             }
         }
@@ -797,6 +807,8 @@ listing on I<port> and handling requests using Net::LDAP::Server.
 
 I<port> defaults to 10636.
 
+I<port> may be an IO::Socket::INET object listening to a local port.
+
 I<key_value_args> may be:
 
 =over
@@ -846,10 +858,10 @@ sub new {
     }
     elsif ( $pid == 0 ) {
 
-        warn "Creating new LDAP server on port $port ... \n";
+        warn "Creating new LDAP server on port " . (ref $port ? $port->sockport : $port) . " ... \n" if $ENV{LDAP_DEBUG};
 
         # the child (server)
-        my $sock = IO::Socket::INET->new(
+        my $sock = ref $port ? $port : IO::Socket::INET->new(
             Listen    => 5,
             Proto     => 'tcp',
             Reuse     => 1,
@@ -885,7 +897,7 @@ sub new {
                         # if there are no open connections,
                         # exit the child process.
                         if ( !keys %Handlers ) {
-                            warn " ... shutting down server\n";
+                            warn " ... shutting down server\n" if $ENV{LDAP_DEBUG};
                             exit(0);
                         }
                     }
@@ -906,25 +918,21 @@ sub new {
 
 }
 
-=head2 DESTROY
+=head2 stop
 
-When a LDAP test server object is destroyed, waitpid() is called
-on the associated child process. Typically this is unnecessary, but
-implemented here as an exercise.
+Calls waitpid() on the server's associated child process.
+You may find it helpful to call this method explicitly,
+especially if you are creating multiple
+servers in the same test. Otherwise, this method is typically not
+needed and may even cause your tests to hang indefinitely if
+they die prematurely. YMMV.
 
 =cut
 
-sub DESTROY {
-    my $pid = ${ $_[0] };
-
-    #warn "DESTROYing a LDAP server with pid $pid";
-
-    # calling waitpid() here causes some tests to hang indefinitely if they
-    # die prematurely.
-    #my $epid = waitpid( $pid, 0 );
-
-    #carp "$pid [$epid] exited with value $?";
-
+sub stop {
+    my $server = shift;
+    my $pid    = $$server;
+    return waitpid( $pid, 0 );
 }
 
 =head1 AUTHOR
