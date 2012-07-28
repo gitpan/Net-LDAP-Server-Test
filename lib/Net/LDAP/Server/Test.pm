@@ -7,7 +7,7 @@ use IO::Select;
 use IO::Socket;
 use Data::Dump ();
 
-our $VERSION = '0.13';
+our $VERSION = '0.14';
 
 =head1 NAME
 
@@ -55,6 +55,7 @@ Only one user-level method is implemented: new().
         LDAP_OPERATIONS_ERROR
         LDAP_UNWILLING_TO_PERFORM
     );
+    use Net::LDAP::Util qw(ldap_explode_dn);
     use Net::LDAP::Entry;
     use Net::LDAP::Filter;
     use Net::LDAP::FilterMatch;
@@ -74,12 +75,14 @@ Only one user-level method is implemented: new().
     our %Data;    # package data lasts as long as $$ does.
     our $Cookies = 0;
     our %Searches;
+    my @Scopes = qw(base one sub);
 
     # constructor
     sub new {
         my ( $class, $sock, %args ) = @_;
         my $self = $class->SUPER::new($sock);
-        warn sprintf "Accepted connection from: %s\n", $sock->peerhost() if $ENV{LDAP_DEBUG};
+        warn sprintf "Accepted connection from: %s\n", $sock->peerhost()
+            if $ENV{LDAP_DEBUG};
         $self->{_flags} = \%args;
         return $self;
     }
@@ -127,18 +130,19 @@ Only one user-level method is implemented: new().
         #warn 'SEARCH SCHEMA: ' . Data::Dump::dump \@_;
 
         my @results;
-        my $base    = $reqData->{baseObject};
-        my $scope   = $reqData->{scope} || 'sub';
-        my @attrs   = @{$reqData->{attributes} || []};
+        my $base = $reqData->{baseObject};
+
+        # $reqData->{scope} is a enum but we want a word
+        my $scope
+            = $Scopes[ defined $reqData->{scope} ? $reqData->{scope} : 2 ];
+        my @attrs = @{ $reqData->{attributes} || [] };
         my @filters = ();
 
-        if ( $scope ne 'base' ) {
-            if ( exists $reqData->{filter} ) {
+        if ( exists $reqData->{filter} ) {
 
-                push( @filters,
-                    bless( $reqData->{filter}, 'Net::LDAP::Filter' ) );
+            push( @filters,
+                bless( $reqData->{filter}, 'Net::LDAP::Filter' ) );
 
-            }
         }
 
         #warn "stored Data: " . Data::Dump::dump \%Data;
@@ -197,7 +201,11 @@ Only one user-level method is implemented: new().
                 next unless $dn eq $base;
             }
             elsif ( $scope eq 'one' ) {
-                next unless $dn =~ m/^(\w+=\w+,)?$base$/;
+                my $dn_depth   = scalar @{ ldap_explode_dn($dn) };
+                my $base_depth = scalar @{ ldap_explode_dn($base) };
+
+            # We're guaranteed to be at or under $base thanks to the m// above
+                next unless $dn_depth == $base_depth + 1;
             }
 
             my $entry = $Data{$dn};
@@ -215,7 +223,7 @@ Only one user-level method is implemented: new().
             }
 
             #warn "matched $match";
-            if ( $match == scalar(@filters) ) {    # or $dn eq $base ) {
+            if ( $match == scalar(@filters) ) {
 
                 # clone the entry so that client cannot modify %Data
                 my $result = $entry->clone;
@@ -414,13 +422,13 @@ Only one user-level method is implemented: new().
             my $attr  = $mod->{modification}->{type};
             my $vals  = $mod->{modification}->{vals};
             my $entry = $Data{$key};
-            if ($mod->{operation} == 0) {
+            if ( $mod->{operation} == 0 ) {
                 $entry->add( $attr => $vals );
             }
-            elsif ($mod->{operation} == 1) {
+            elsif ( $mod->{operation} == 1 ) {
                 $entry->delete( $attr => $vals );
             }
-            elsif ($mod->{operation} == 2) {
+            elsif ( $mod->{operation} == 2 ) {
                 $entry->replace( $attr => $vals );
             }
             else {
@@ -869,7 +877,10 @@ sub new {
     }
     elsif ( $pid == 0 ) {
 
-        warn "Creating new LDAP server on port " . (ref $port ? $port->sockport : $port) . " ... \n" if $ENV{LDAP_DEBUG};
+        warn "Creating new LDAP server on port "
+            . ( ref $port ? $port->sockport : $port )
+            . " ... \n"
+            if $ENV{LDAP_DEBUG};
 
         # the child (server)
         my $sock = ref $port ? $port : IO::Socket::INET->new(
@@ -908,7 +919,8 @@ sub new {
                         # if there are no open connections,
                         # exit the child process.
                         if ( !keys %Handlers ) {
-                            warn " ... shutting down server\n" if $ENV{LDAP_DEBUG};
+                            warn " ... shutting down server\n"
+                                if $ENV{LDAP_DEBUG};
                             exit(0);
                         }
                     }
