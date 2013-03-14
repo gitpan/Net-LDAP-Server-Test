@@ -7,7 +7,7 @@ use IO::Select;
 use IO::Socket;
 use Data::Dump ();
 
-our $VERSION = '0.17';
+our $VERSION = '0.18';
 
 =head1 NAME
 
@@ -936,6 +936,8 @@ blessed reference to the PID of the forked server.
 
 =cut
 
+my %PORTS;    # inside-out tracking of port-per-server
+
 sub new {
     my $class = shift;
     my $port  = shift || 10636;
@@ -1017,7 +1019,9 @@ sub new {
 
         return unless <$r_fh> =~ /Ready/;    # newline varies
         close($r_fh);
-        return bless( \$pid, $class );
+        my $self = bless( \$pid, $class );
+        $PORTS{"$self"} = $port;
+        return $self;
     }
 
 }
@@ -1051,12 +1055,40 @@ sub stop {
     };
     if ($@) {
         warn "$@";
-        kill( 1, $pid );
+        my $cnt = kill( 9, $pid );
+        warn "kill(9,$pid) returned $cnt\n";
     }
     else {
         warn "waitpid($pid, 0) worked" if $ENV{LDAP_DEBUG};
     }
+    my $tries = 0;
+    while ( $server->port_is_open() ) {
+        warn "Waiting for port to close...\n";
+        sleep(1);
+        if ( $tries++ > 10 ) {
+            warn "Failed to determine that port closed. Giving up.\n";
+            last;
+        }
+    }
     return $pid;
+}
+
+=head2 port_is_open
+
+Returns IO::Socket::INET->new for the current server port.
+If the port is already in use, this is a false value.
+
+=cut
+
+sub port_is_open {
+    my $self = shift;
+    my $port = $PORTS{"$self"};
+    return IO::Socket::INET->new(
+        PeerAddr => '127.0.0.1',
+        PeerPort => $port,
+        Proto    => 'tcp',
+        Type     => SOCK_STREAM,
+    );
 }
 
 =head1 AUTHOR
